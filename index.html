@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+<body>
+    <button onclick="create({ descricao: 'Primeiro teste', data: new Date().toISOString() })">Adicionar</button>
+    <button onclick="listar()">Listar</button>
+    <!--<button onclick="dropCollection('ocorrencias')">Deleta ocorrencias</button>-->
+
+    <input type="text" id="ocorrencia"/>
+    <button onclick="deletarOcorrencia()">Deletar</button>
+    <button onclick="atualizaOcorrencia()">Atualizar</button>
+
+<script src="https://unpkg.com/localbase/dist/localbase.min.js"></script>
+<script>
+  const db = new Localbase('offlineDB');
+
+  let syncing = false; // flag global
+
+    // CREATE
+  async function create(dados) {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    await db.collection('ocorrencias').add({ ...dados, id: id, sincronizado: false, acao: 'create' });
+  }
+
+  // READ
+  async function read() {
+    const dados = await db.collection('ocorrencias').get() || [];
+    const filter = dados.filter(item => item.deletado != true);
+    return filter;
+  }
+
+  async function readId(id) {
+    const dados = await read();
+    return dados.find(item => item.id == id);
+  }
+
+  // UPDATE
+  async function update(id, dados) {
+    const dado = await readId(id);
+    if(dado && !dado.deletado) { // garantir que não atualiza um item deletado
+      await db.collection('ocorrencias').doc({ id: id }).update({ ...dados, sincronizado: false, acao: 'update' });
+    }
+  }
+
+  // DELETE
+  async function deletar(id) {
+    await db.collection('ocorrencias').doc({ id: id }).update({deletado: true, sincronizado: false, acao: 'delete'});
+  }
+
+  async function dropCollection(collectionName) {
+    db.collection(collectionName).delete();
+  }
+
+  async function dropDb(db) {
+    db.delete();
+  }
+
+  // --- Sincronização automática ---
+  async function tentarSync() {
+
+    try {
+        
+        if (syncing) return; // se já está sincronizando, não faz nada
+        if (!navigator.onLine) return;
+        
+        const todos = await db.collection('ocorrencias').get() || []; // pega tudo
+        const pendentes = todos.filter(i => i.sincronizado === false); // filtra manualmente
+        
+        if (!pendentes.length) return;
+
+        syncing = true; // marca como em andamento
+
+        for(let pendente of pendentes) {
+
+            try {
+
+            const res = await fetch('http://localhost:12345/api/ocorrencias/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(pendente)
+            });
+
+                if (res.ok) {
+                    await db.collection('ocorrencias').doc({ id: pendente.id }).update({ sincronizado: true })
+                    console.log('✅ Sincronizado com sucesso!')
+                }
+            } catch (e) {
+                console.warn('⏳ Falha na rede, vai tentar novamente...')
+            }
+
+        }
+
+    } finally {
+        syncing = false; // libera a flag mesmo se der erro
+        console.log('Sync finalizado.');
+    }
+
+  }
+
+  // Outras
+  async function deletarOcorrencia() {
+    let texto = document.getElementById('ocorrencia').value;
+    await deletar(texto);
+  }
+
+  async function atualizaOcorrencia() {
+    let texto = document.getElementById('ocorrencia').value;
+    await update(texto, {outroCampo: 'teste', data: 'XXX'});
+  }
+
+  async function listar() {
+    console.log(await read());
+  }
+
+
+  window.create = create;
+  window.read = read;
+  window.update = update;
+  window.deletar = deletar;
+  window.dropCollection = dropCollection;
+
+  window.listar = listar
+  window.deletarOcorrencia = deletarOcorrencia;
+  window.atualizaOcorrencia = atualizaOcorrencia;
+
+  // Tentativas automáticas
+  window.addEventListener('online', tentarSync)
+  setInterval(tentarSync, 5000)
+
+  
+</script>
+
+</body>
+</html>
